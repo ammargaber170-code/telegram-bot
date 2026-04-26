@@ -22,10 +22,19 @@ import os
 import re
 import sys
 import time
+import importlib.util
 from collections import defaultdict, deque
 from datetime import datetime
 from html import escape
 from typing import Optional
+
+if importlib.util.find_spec("telegram") is None:
+    print(
+        "Missing dependency: python-telegram-bot.\n"
+        "Install dependencies with:\n"
+        "  pip install -r requirements.txt"
+    )
+    sys.exit(1)
 
 from telegram import ChatPermissions, Update
 from telegram.constants import ParseMode
@@ -89,6 +98,21 @@ ROLE_LEVEL = {
     ROLE_USER: 0,
 }
 
+ROLE_DEFAULT_PERMISSIONS = {
+    ROLE_OWNER: {
+        "delete", "mute", "ban", "warn", "lock", "purge", "broadcast", "replace",
+        "grant", "revoke", "setrole", "setbadge", "info", "reset",
+    },
+    ROLE_ADMIN: {
+        "delete", "mute", "ban", "warn", "lock", "purge", "broadcast", "replace", "info", "reset",
+    },
+    ROLE_MODERATOR: {
+        "delete", "mute", "warn", "broadcast", "replace", "info", "reset",
+    },
+    ROLE_VIP: set(),
+    ROLE_USER: set(),
+}
+
 DEFAULT_BADGES = {
     ROLE_OWNER: "👑",
     ROLE_ADMIN: "🛡️",
@@ -134,6 +158,7 @@ class BotState:
             "users": {},
             "custom_permissions": {},
             "badges": {},
+            "role_overrides": {},
         }
         self.load()
 
@@ -172,7 +197,10 @@ flood_cache = defaultdict(lambda: deque(maxlen=10))
 
 def get_token_and_owner():
     print(ASCII_ART)
-    if os.path.exists(TOKEN_FILE):
+    env_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if env_token:
+        token = env_token
+    elif os.path.exists(TOKEN_FILE):
         with open(TOKEN_FILE, "r", encoding="utf-8") as f:
             token = f.read().strip()
     else:
@@ -180,7 +208,11 @@ def get_token_and_owner():
         with open(TOKEN_FILE, "w", encoding="utf-8") as f:
             f.write(token)
 
-    if state.data["owner_id"] is None:
+    env_owner = os.getenv("TELEGRAM_OWNER_ID", "").strip()
+    if env_owner.isdigit():
+        state.data["owner_id"] = int(env_owner)
+        state.save()
+    elif state.data["owner_id"] is None:
         try:
             state.data["owner_id"] = int(input("Enter Owner ID: ").strip())
             state.save()
@@ -242,6 +274,9 @@ async def get_target_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_user_role(user_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> str:
     if user_id == state.data["owner_id"]:
         return ROLE_OWNER
+    role_override = state.data.get("role_overrides", {}).get(str(user_id))
+    if role_override in [ROLE_ADMIN, ROLE_MODERATOR, ROLE_VIP, ROLE_USER]:
+        return role_override
     if user_id in state.data.get("super_admins", []):
         return ROLE_ADMIN
     if user_id in state.data.get("moderators", []):
@@ -278,6 +313,8 @@ async def has_permission(
         return True
 
     if permission_key:
+        if permission_key in ROLE_DEFAULT_PERMISSIONS.get(role, set()):
+            return True
         user_perms = state.data.get("custom_permissions", {}).get(str(user_id), [])
         if permission_key in user_perms:
             return True
@@ -347,7 +384,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>ADMIN</b>\n"
         "/admin /unadmin /mod /unmod\n"
         "/vip /unvip /allow /disallow\n"
-        "/setcode /setbadge /grant /revoke\n"
+        "/setcode /setrole /setbadge /grant /revoke\n"
         "/list /add /delword\n"
         f"{STYLE['sig']}"
     )
@@ -512,28 +549,4 @@ async def set_badge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state.data.setdefault("badges", {})[str(target.id)] = badge
     state.save()
     await log_admin_action(update, "setbadge", target, badge)
-    await update.message.reply_text(f"{STYLE['success']}\nBadge updated to {escape(badge)}", parse_mode=ParseMode.HTML)
-
-
-async def grant_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
-        return
-    target = await get_target_user(update, context)
-    if target in (None, "unknown_username") or len(context.args) < 2:
-        return await update.message.reply_text("Usage: /grant <user> <permission>")
-
-    perm = context.args[-1].lower().strip()
-    user_perms = state.data.setdefault("custom_permissions", {}).setdefault(str(target.id), [])
-    if perm not in user_perms:
-        user_perms.append(perm)
-    state.save()
-    await log_admin_action(update, "grant", target, perm)
-    await update.message.reply_text(f"{STYLE['success']}\nGranted permission: <b>{escape(perm)}</b>", parse_mode=ParseMode.HTML)
-
-
-async def revoke_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
-        return
-    target = await get_target_user(update, context)
-    if target in (None, "unknown_username") or len(context.args) < 2:
-        return await update.message.re
+ 
