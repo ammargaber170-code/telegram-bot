@@ -2,138 +2,164 @@
 # -*- coding: utf-8 -*-
 
 """
-馃洝锔� Professional Guard Bot (V12 - Join Date Tracker)
-POWERED BY: @Desiign_lab
-Updates:
-- New: /info shows Join Date (for new members).
-- Logic: Bot records timestamp when users join via Welcome handler.
-- Includes: All V11 features (Lock, Purge, Replace, etc).
+Professional Guard Bot (V13)
+Powered by Design Lab
+
+Features:
+- Legacy behavior retained (lock, unlock, purge, replace, info, reset, allow/disallow, vip, admin, setcode, etc.)
+- Role system: owner, admin, moderator, vip, user
+- Custom per-user permissions
+- /del command can delete without reply (using message id or previous message)
+- Admin action logging
+- Badge system
+- Join-date tracking
 """
 
-import os
+import asyncio
 import json
-import time
 import logging
+import os
 import re
 import sys
-import asyncio
-from datetime import datetime, timedelta
+import time
 from collections import defaultdict, deque
+from datetime import datetime
+from html import escape
+from typing import Optional
 
-from telegram import Update, ChatPermissions
+from telegram import ChatPermissions, Update
+from telegram.constants import ParseMode
+from telegram.error import BadRequest, NetworkError, TelegramError, TimedOut
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
     ContextTypes,
+    MessageHandler,
     filters,
 )
 from telegram.request import HTTPXRequest
-from telegram.error import TelegramError, TimedOut, NetworkError, BadRequest
 
 # ==============================================================================
-# 1. VISUAL STYLES
+# 1. STYLES
 # ==============================================================================
 
 ASCII_ART = """
 \033[1;36m
-鈻堚枅鈺�   鈻堚枅鈺� 鈻堚枅鈺椻枅鈻堚枅鈻堚枅鈻堚晽 
-鈻堚枅鈺�   鈻堚枅鈺戔枅鈻堚枅鈺戔暁鈺愨晲鈺愨晲鈻堚枅鈺�
-鈻堚枅鈺�   鈻堚枅鈺戔暁鈻堚枅鈺� 鈻堚枅鈻堚枅鈻堚晹鈺�
-鈺氣枅鈻堚晽 鈻堚枅鈺斺暆 鈻堚枅鈺戔枅鈻堚晹鈺愨晲鈺愨暆 
- 鈺氣枅鈻堚枅鈻堚晹鈺�  鈻堚枅鈺戔枅鈻堚枅鈻堚枅鈻堚枅鈺�
-  鈺氣晲鈺愨晲鈺�   鈺氣晲鈺濃暁鈺愨晲鈺愨晲鈺愨晲鈺�
- 馃洝锔� V12: DATE TRACKER 馃洝锔�
+██████╗  █████╗ ██╗   ██╗██████╗ ██████╗
+██╔════╝ ██╔══██╗██║   ██║██╔══██╗██╔══██╗
+██║  ███╗███████║██║   ██║██████╔╝██║  ██║
+██║   ██║██╔══██║██║   ██║██╔══██╗██║  ██║
+╚██████╔╝██║  ██║╚██████╔╝██║  ██║██████╔╝
+ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝
+        V13 PROFESSIONAL EDITION
 \033[0m
 """
 
 STYLE = {
-    "header": "<b>馃敯 SYSTEM DASHBOARD 馃敯</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "warn": "<b>鈿狅笍 WARNING ISSUED</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "ban": "<b>鉀� USER BANNED</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "mute": "<b>馃攪 USER MUTED</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "success": "<b>鉁� SUCCESS</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "error": "<b>鉂� ERROR</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "replace": "<b>馃敂 ADMIN NOTICE</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "info": "<b>馃懁 USER INTELLIGENCE</b>\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣",
-    "sig": "\n鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣鈹佲攣\n<i>馃敀 Protected by GuardBot</i>"
+    "header": "<b>🛡 SYSTEM DASHBOARD</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "warn": "<b>⚠️ WARNING ISSUED</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "ban": "<b>⛔ USER BANNED</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "mute": "<b>🔇 USER MUTED</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "success": "<b>✅ SUCCESS</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "error": "<b>❌ ERROR</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "replace": "<b>📝 ADMIN NOTICE</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "info": "<b>👤 USER INTELLIGENCE</b>\n━━━━━━━━━━━━━━━━━━━━",
+    "sig": "\n━━━━━━━━━━━━━━━━━━━━\n<i>Design Lab</i>",
 }
 
 # ==============================================================================
-# 2. CONFIGURATION
+# 2. CONFIG
 # ==============================================================================
+
+TOKEN_FILE = ".bot_token"
+DATA_FILE = "bot_state.json"
+ACTION_LOG_FILE = "admin_actions.log"
+
+ROLE_OWNER = "owner"
+ROLE_ADMIN = "admin"
+ROLE_MODERATOR = "moderator"
+ROLE_VIP = "vip"
+ROLE_USER = "user"
+
+ROLE_LEVEL = {
+    ROLE_OWNER: 100,
+    ROLE_ADMIN: 70,
+    ROLE_MODERATOR: 50,
+    ROLE_VIP: 20,
+    ROLE_USER: 0,
+}
+
+DEFAULT_BADGES = {
+    ROLE_OWNER: "👑",
+    ROLE_ADMIN: "🛡️",
+    ROLE_MODERATOR: "🔧",
+    ROLE_VIP: "💎",
+    ROLE_USER: "👤",
+}
+
+URL_PATTERN = re.compile(r"(https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[^\s]{2,})")
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
+    handlers=[logging.FileHandler("bot.log", encoding="utf-8"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
-
-TOKEN_FILE = ".bot_token"
-DATA_FILE = "bot_state.json"
-
-PERM_OWNER = 100
-PERM_SUPER_ADMIN = 80
-PERM_ADMIN = 50
-PERM_VIP = 20
-PERM_USER = 0
-
-URL_PATTERN = re.compile(r'(https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[^\s]{2,})')
+action_logger = logging.getLogger("admin_actions")
+action_logger.setLevel(logging.INFO)
+action_logger.addHandler(logging.FileHandler(ACTION_LOG_FILE, encoding="utf-8"))
 
 # ==============================================================================
-# 3. STATE MANAGEMENT
+# 3. STATE
 # ==============================================================================
+
 
 class BotState:
     def __init__(self):
         self.data = {
-            "owner_id": None, 
-            "super_admins": [], 
-            "vips": [], 
-            "banned_words": [], 
-            "allowed_domains": [], 
+            "owner_id": None,
+            "super_admins": [],
+            "moderators": [],
+            "vips": [],
+            "banned_words": [],
+            "allowed_domains": [],
             "admin_codes": {},
             "username_map": {},
             "settings": {
                 "welcome_msg": "Welcome {mention}!\nPlease respect the rules.",
-                "warn_msg": "{header}\n馃懁 <b>Target:</b> {mention}\n馃敘 <b>Count:</b> {current}/{limit}\n馃摑 <b>Reason:</b> {reason}{sig}",
-                "mute_msg": "{header}\n馃懁 <b>Target:</b> {mention}\n馃洃 <b>Action:</b> Muted\n馃摑 <b>Reason:</b> Excessive Violations{sig}",
-                "ban_msg": "{header}\n馃懁 <b>Target:</b> {mention}\n馃洃 <b>Action:</b> Banned\n馃摑 <b>Reason:</b> Security Threat{sig}"
+                "warn_msg": "{header}\n👁 <b>Target:</b> {mention}\n🔘 <b>Count:</b> {current}/{limit}\n📑 <b>Reason:</b> {reason}{sig}",
+                "mute_msg": "{header}\n👁 <b>Target:</b> {mention}\n🛠 <b>Action:</b> Muted\n📑 <b>Reason:</b> Excessive Violations{sig}",
+                "ban_msg": "{header}\n👁 <b>Target:</b> {mention}\n🛠 <b>Action:</b> Banned\n📑 <b>Reason:</b> Security Threat{sig}",
             },
-            "users": {}
+            "users": {},
+            "custom_permissions": {},
+            "badges": {},
         }
         self.load()
 
     def load(self):
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, 'r', encoding='utf-8') as f: 
-                    loaded = json.load(f)
-                    self.data.update(loaded)
-            except: pass
+        if not os.path.exists(DATA_FILE):
+            return
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                self.data.update(json.load(f))
+        except Exception as exc:
+            logger.warning("Failed to load state: %s", exc)
 
     def save(self):
-        try:
-            with open(DATA_FILE, 'w', encoding='utf-8') as f: json.dump(self.data, f, indent=2, ensure_ascii=False)
-        except: pass
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, indent=2, ensure_ascii=False)
 
-    def get_user_data(self, user_id):
+    def cache_username(self, user):
+        if user and user.username:
+            self.data["username_map"][user.username.lower()] = user.id
+
+    def get_user_data(self, user_id: int):
         uid = str(user_id)
-        # Structure: {"warns": 0, "timestamps": [], "join_date": timestamp}
-        if uid not in self.data["users"]: 
+        if uid not in self.data["users"]:
             self.data["users"][uid] = {"warns": 0, "timestamps": [], "join_date": None}
         return self.data["users"][uid]
 
-    def update_user_data(self, user_id, data):
-        self.data["users"][str(user_id)] = data
-        self.save()
-
-    def cache_username(self, user):
-        if user.username:
-            u_lower = user.username.lower()
-            if u_lower not in self.data["username_map"] or self.data["username_map"][u_lower] != user.id:
-                self.data["username_map"][u_lower] = user.id
 
 state = BotState()
 admin_cache = {}
@@ -143,328 +169,371 @@ flood_cache = defaultdict(lambda: deque(maxlen=10))
 # 4. UTILITIES
 # ==============================================================================
 
+
 def get_token_and_owner():
     print(ASCII_ART)
     if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, 'r') as f: token = f.read().strip()
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+            token = f.read().strip()
     else:
-        token = input("馃攽 Enter Bot Token: ").strip()
-        with open(TOKEN_FILE, 'w') as f: f.write(token)
-    
+        token = input("Enter Bot Token: ").strip()
+        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+            f.write(token)
+
     if state.data["owner_id"] is None:
         try:
-            owner_id = int(input("馃憫 Enter Owner ID: ").strip())
-            state.data["owner_id"] = owner_id
+            state.data["owner_id"] = int(input("Enter Owner ID: ").strip())
             state.save()
-        except: sys.exit(1)
+        except ValueError:
+            sys.exit(1)
     return token
 
-async def get_target_user(update, context):
+
+def normalize_link(url: str) -> str:
+    url = re.sub(r"^https?://", "", url.lower())
+    url = re.sub(r"^www\.", "", url)
+    return url.rstrip("/")
+
+
+def display_name(user) -> str:
+    return user.full_name if user else "Unknown"
+
+
+def resolve_user_badge(user_id: int, role: str) -> str:
+    return state.data.get("badges", {}).get(str(user_id), DEFAULT_BADGES.get(role, "👤"))
+
+
+async def log_admin_action(update: Update, action: str, target=None, details: str = ""):
+    actor = update.effective_user
+    chat = update.effective_chat
+    target_txt = f" target={target.id}" if target else ""
+    line = (
+        f"chat={chat.id} actor={actor.id} action={action}{target_txt} details={details} "
+        f"at={datetime.utcnow().isoformat()}"
+    )
+    action_logger.info(line)
+
+
+async def get_target_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.reply_to_message:
         return update.message.reply_to_message.from_user
-    if context.args:
-        raw_arg = context.args[0]
-        if raw_arg.isdigit():
-            try:
-                member = await context.bot.get_chat_member(update.effective_chat.id, int(raw_arg))
-                return member.user
-            except: pass
-        elif raw_arg.startswith("@"):
-            username = raw_arg[1:].lower()
-            user_id = state.data["username_map"].get(username)
-            if user_id:
-                try:
-                    member = await context.bot.get_chat_member(update.effective_chat.id, user_id)
-                    return member.user
-                except: pass
-            else:
-                return "unknown_username"
+    if not context.args:
+        return None
+
+    raw = context.args[0]
+    if raw.isdigit():
+        try:
+            m = await context.bot.get_chat_member(update.effective_chat.id, int(raw))
+            return m.user
+        except TelegramError:
+            return None
+    if raw.startswith("@"):
+        uid = state.data["username_map"].get(raw[1:].lower())
+        if not uid:
+            return "unknown_username"
+        try:
+            m = await context.bot.get_chat_member(update.effective_chat.id, uid)
+            return m.user
+        except TelegramError:
+            return None
     return None
 
-async def check_permissions(user_id, chat_id, context):
-    if user_id == state.data["owner_id"]: return PERM_OWNER
-    if user_id in state.data["super_admins"]: return PERM_SUPER_ADMIN
-    
-    now = time.time()
-    if chat_id not in admin_cache: admin_cache[chat_id] = {}
-    if user_id in admin_cache[chat_id]:
-        s, t = admin_cache[chat_id][user_id]
-        if now < t: 
-            return PERM_ADMIN if s in ['creator', 'administrator'] else PERM_VIP if user_id in state.data["vips"] else PERM_USER
 
+async def get_user_role(user_id: int, chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> str:
+    if user_id == state.data["owner_id"]:
+        return ROLE_OWNER
+    if user_id in state.data.get("super_admins", []):
+        return ROLE_ADMIN
+    if user_id in state.data.get("moderators", []):
+        return ROLE_MODERATOR
+
+    now = time.time()
+    admin_cache.setdefault(chat_id, {})
+    if user_id in admin_cache[chat_id] and now < admin_cache[chat_id][user_id][1]:
+        status = admin_cache[chat_id][user_id][0]
+        if status in ["creator", "administrator"]:
+            return ROLE_ADMIN
     try:
         m = await context.bot.get_chat_member(chat_id, user_id)
         admin_cache[chat_id][user_id] = (m.status, now + 60)
-        if m.status in ['creator', 'administrator']: return PERM_ADMIN
-    except: pass
-    
-    if user_id in state.data["vips"]: return PERM_VIP
-    return PERM_USER
+        if m.status in ["creator", "administrator"]:
+            return ROLE_ADMIN
+    except TelegramError:
+        pass
 
-def normalize_link(url):
-    url = re.sub(r'^https?://', '', url.lower())
-    url = re.sub(r'^www\.', '', url)
-    return url.rstrip('/')
+    if user_id in state.data.get("vips", []):
+        return ROLE_VIP
+    return ROLE_USER
 
-async def apply_punishment(update, context, user_id, user_name, reason):
+
+async def has_permission(
+    user_id: int,
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    min_role: str = ROLE_USER,
+    permission_key: Optional[str] = None,
+) -> bool:
+    role = await get_user_role(user_id, chat_id, context)
+    if ROLE_LEVEL[role] >= ROLE_LEVEL[min_role]:
+        return True
+
+    if permission_key:
+        user_perms = state.data.get("custom_permissions", {}).get(str(user_id), [])
+        if permission_key in user_perms:
+            return True
+    return False
+
+
+async def apply_punishment(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, username: str, reason: str):
     chat_id = update.effective_chat.id
     ud = state.get_user_data(user_id)
     now = time.time()
-    
+
     ud["timestamps"] = [t for t in ud["timestamps"] if now - t < 600]
-    ud["warns"] += 1; ud["timestamps"].append(now)
-    
-    act = "ban" if ud["warns"] >=5 else "mute" if (len(ud["timestamps"])>=4 or ud["warns"]>=3) else "warn"
-    
-    if act == "warn":
-        msg = state.data["settings"]["warn_msg"].format(header=STYLE["warn"], mention=f"@{user_name}", current=ud["warns"], limit=5, reason=reason, sig=STYLE["sig"])
-    elif act == "mute":
+    ud["warns"] += 1
+    ud["timestamps"].append(now)
+
+    action = "ban" if ud["warns"] >= 5 else "mute" if (len(ud["timestamps"]) >= 4 or ud["warns"] >= 3) else "warn"
+    mention = f"@{escape(username)}" if username else f"<code>{user_id}</code>"
+
+    if action == "warn":
+        msg = state.data["settings"]["warn_msg"].format(
+            header=STYLE["warn"], mention=mention, current=ud["warns"], limit=5, reason=escape(reason), sig=STYLE["sig"]
+        )
+    elif action == "mute":
         try:
-            await context.bot.restrict_chat_member(chat_id, user_id, ChatPermissions(False))
-            msg = state.data["settings"]["mute_msg"].format(header=STYLE["mute"], mention=f"@{user_name}", sig=STYLE["sig"])
+            await context.bot.restrict_chat_member(chat_id, user_id, ChatPermissions(can_send_messages=False))
+            msg = state.data["settings"]["mute_msg"].format(header=STYLE["mute"], mention=mention, sig=STYLE["sig"])
             ud["timestamps"] = []
-        except: msg = "鉂� Error muting."
-    elif act == "ban":
+        except TelegramError:
+            msg = f"{STYLE['error']}\nError muting user.{STYLE['sig']}"
+    else:
         try:
             await context.bot.ban_chat_member(chat_id, user_id)
-            msg = state.data["settings"]["ban_msg"].format(header=STYLE["ban"], mention=f"@{user_name}", sig=STYLE["sig"])
-            ud["warns"] = 0; ud["timestamps"] = []
-        except: msg = "鉂� Error banning."
+            msg = state.data["settings"]["ban_msg"].format(header=STYLE["ban"], mention=mention, sig=STYLE["sig"])
+            ud["warns"] = 0
+            ud["timestamps"] = []
+        except TelegramError:
+            msg = f"{STYLE['error']}\nError banning user.{STYLE['sig']}"
 
-    await context.bot.send_message(chat_id, msg, parse_mode="HTML")
-    state.update_user_data(user_id, ud)
+    state.save()
+    await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
+
 
 # ==============================================================================
 # 5. COMMANDS
 # ==============================================================================
 
-async def cmd_start(update, context):
-    if update.effective_chat.type == "private":
-        dash = (
-            f"{STYLE['header']}\n"
-            "馃憢 <b>Welcome Commander!</b>\n\n"
-            "馃洝锔� <b>Guard System:</b> <code>ONLINE</code>\n"
-            "馃 <b>Smart Cache:</b> <code>ACTIVE</code>\n\n"
-            "<i>Bot recognized: @Desiign_lab</i>\n"
-            f"{STYLE['sig']}"
-        )
-        await update.message.reply_text(dash, parse_mode="HTML")
 
-async def cmd_help(update, context):
-    menu = (
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != "private":
+        return
+    text = (
         f"{STYLE['header']}\n"
-        "<b>馃懏鈥嶁檪锔� CONTROL:</b>\n"
-        "/lock, /unlock, /purge\n"
-        "/info, /reset, /replace\n\n"
-        "<b>鈿欙笍 ADMIN:</b>\n"
-        "/admin, /allow, /setcode\n"
-        "/ban, /mute, /vip\n"
+        "👋 <b>Welcome Commander!</b>\n\n"
+        "🛡 <b>Guard System:</b> <code>ONLINE</code>\n"
+        "📦 <b>Smart Cache:</b> <code>ACTIVE</code>\n\n"
         f"{STYLE['sig']}"
     )
-    await update.message.reply_text(menu, parse_mode="HTML")
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
-async def config_general(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_OWNER: return
-    cmd = update.message.text.split()[0][1:]
-    
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    menu = (
+        f"{STYLE['header']}\n"
+        "<b>CONTROL</b>\n"
+        "/lock /unlock /purge /del\n"
+        "/info /reset /replace\n\n"
+        "<b>ADMIN</b>\n"
+        "/admin /unadmin /mod /unmod\n"
+        "/vip /unvip /allow /disallow\n"
+        "/setcode /setbadge /grant /revoke\n"
+        "/list /add /delword\n"
+        f"{STYLE['sig']}"
+    )
+    await update.message.reply_text(menu, parse_mode=ParseMode.HTML)
+
+
+async def config_general(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
+    cmd = update.message.text.split()[0][1:].lower()
+
     if cmd == "list":
-        d = state.data
-        def fmt(lst): return ', '.join(map(str, lst)) if lst else "None"
-        def resolve_names(ids):
-            names = []
-            rev_map = {v: k for k, v in d["username_map"].items()}
-            for i in ids: names.append(f"@{rev_map[i]}" if i in rev_map else str(i))
-            return ', '.join(names) if names else "None"
+        rev = {v: k for k, v in state.data["username_map"].items()}
+
+        def names(ids):
+            return ", ".join(f"@{rev[i]}" if i in rev else str(i) for i in ids) or "None"
 
         report = (
             f"{STYLE['header']}\n"
-            f"馃懏 <b>Super Admins:</b>\n<code>{resolve_names(d['super_admins'])}</code>\n\n"
-            f"馃専 <b>VIP Members:</b>\n<code>{resolve_names(d['vips'])}</code>\n\n"
-            f"馃寪 <b>Allowed Links:</b>\n<code>{fmt(d['allowed_domains'])}</code>\n\n"
-            f"馃毇 <b>Banned Words:</b>\n<code>{fmt(d['banned_words'])}</code>\n"
+            f"Admins: <code>{escape(names(state.data['super_admins']))}</code>\n"
+            f"Moderators: <code>{escape(names(state.data['moderators']))}</code>\n"
+            f"VIPs: <code>{escape(names(state.data['vips']))}</code>\n"
+            f"Allowed Domains: <code>{escape(', '.join(state.data['allowed_domains']) or 'None')}</code>\n"
+            f"Banned Words: <code>{escape(', '.join(state.data['banned_words']) or 'None')}</code>\n"
             f"{STYLE['sig']}"
         )
-        if len(report) > 4000:
-            await update.message.reply_text(report[:4000], parse_mode="HTML")
-            await update.message.reply_text(report[4000:], parse_mode="HTML")
-        else:
-            await update.message.reply_text(report, parse_mode="HTML")
+        await update.message.reply_text(report, parse_mode=ParseMode.HTML)
         return
 
-    arg = " ".join(context.args).lower()
+    arg = " ".join(context.args).strip().lower()
     if cmd == "add" and arg:
-        state.data["banned_words"].append(arg); state.save()
-        await update.message.reply_text(f"{STYLE['success']}\nAdded: <b>{arg}</b>", parse_mode="HTML")
-    elif cmd == "del" and arg:
-        if arg in state.data["banned_words"]: state.data["banned_words"].remove(arg); state.save()
-        await update.message.reply_text(f"{STYLE['success']}\nRemoved: <b>{arg}</b>", parse_mode="HTML")
+        if arg not in state.data["banned_words"]:
+            state.data["banned_words"].append(arg)
+            state.save()
+        await update.message.reply_text(f"{STYLE['success']}\nAdded banned word: <b>{escape(arg)}</b>", parse_mode=ParseMode.HTML)
+    elif cmd in ["delword", "del"] and arg:
+        if arg in state.data["banned_words"]:
+            state.data["banned_words"].remove(arg)
+            state.save()
+        await update.message.reply_text(f"{STYLE['success']}\nRemoved banned word: <b>{escape(arg)}</b>", parse_mode=ParseMode.HTML)
 
-async def manage_admins(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_OWNER: return
+
+async def manage_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
     target = await get_target_user(update, context)
-    
-    if target == "unknown_username": return await update.message.reply_text(f"{STYLE['error']}\nUnknown username.", parse_mode="HTML")
-    if not target: return await update.message.reply_text("Target required.")
-    
-    cmd = update.message.text.split()[0][1:]
+    if target == "unknown_username":
+        return await update.message.reply_text("Unknown username.")
+    if not target:
+        return await update.message.reply_text("Target required.")
+
+    cmd = update.message.text.split()[0][1:].lower()
     if cmd == "admin":
-        if target.id not in state.data["super_admins"]: state.data["super_admins"].append(target.id)
-        msg = f"User <b>{target.first_name}</b> is now Super Admin."
-    elif cmd == "unadmin":
-        if target.id in state.data["super_admins"]: state.data["super_admins"].remove(target.id)
-        msg = f"User <b>{target.first_name}</b> removed from Admins."
-    state.save()
-    await update.message.reply_text(f"{STYLE['success']}\n{msg}", parse_mode="HTML")
-
-async def config_domains(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_OWNER: return
-    if not context.args: return await update.message.reply_text("Usage: /allow [link]")
-    
-    link = normalize_link(context.args[0])
-    cmd = update.message.text.split()[0][1:]
-    
-    if cmd == "allow":
-        if link not in state.data["allowed_domains"]: state.data["allowed_domains"].append(link)
-        msg = f"Allowed: <b>{link}</b>"
+        if target.id not in state.data["super_admins"]:
+            state.data["super_admins"].append(target.id)
+        msg = f"User <b>{escape(display_name(target))}</b> is now Admin."
     else:
-        if link in state.data["allowed_domains"]: state.data["allowed_domains"].remove(link)
-        msg = f"Removed: <b>{link}</b>"
-    state.save()
-    await update.message.reply_text(f"{STYLE['success']}\n{msg}", parse_mode="HTML")
+        if target.id in state.data["super_admins"]:
+            state.data["super_admins"].remove(target.id)
+        msg = f"User <b>{escape(display_name(target))}</b> removed from Admins."
 
-async def manage_vip(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_OWNER: return
+    state.save()
+    await log_admin_action(update, cmd, target)
+    await update.message.reply_text(f"{STYLE['success']}\n{msg}", parse_mode=ParseMode.HTML)
+
+
+async def manage_mods(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
     target = await get_target_user(update, context)
-    if not target or target == "unknown_username": return await update.message.reply_text("Target required.")
-    
-    cmd = update.message.text.split()[0][1:]
+    if target in (None, "unknown_username"):
+        return await update.message.reply_text("Target required.")
+
+    cmd = update.message.text.split()[0][1:].lower()
+    if cmd == "mod":
+        if target.id not in state.data["moderators"]:
+            state.data["moderators"].append(target.id)
+        msg = "Moderator granted."
+    else:
+        if target.id in state.data["moderators"]:
+            state.data["moderators"].remove(target.id)
+        msg = "Moderator removed."
+    state.save()
+    await log_admin_action(update, cmd, target)
+    await update.message.reply_text(f"{STYLE['success']}\n{msg}", parse_mode=ParseMode.HTML)
+
+
+async def manage_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
+    target = await get_target_user(update, context)
+    if target in (None, "unknown_username"):
+        return await update.message.reply_text("Target required.")
+
+    cmd = update.message.text.split()[0][1:].lower()
     if cmd == "vip":
-        if target.id not in state.data["vips"]: state.data["vips"].append(target.id)
+        if target.id not in state.data["vips"]:
+            state.data["vips"].append(target.id)
         msg = "Added VIP."
     else:
-        if target.id in state.data["vips"]: state.data["vips"].remove(target.id)
+        if target.id in state.data["vips"]:
+            state.data["vips"].remove(target.id)
         msg = "Removed VIP."
     state.save()
-    await update.message.reply_text(f"{STYLE['success']}\n{msg}", parse_mode="HTML")
+    await log_admin_action(update, cmd, target)
+    await update.message.reply_text(f"{STYLE['success']}\n{msg}", parse_mode=ParseMode.HTML)
 
-async def set_code(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_OWNER: return
+
+async def config_domains(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
+    if not context.args:
+        return await update.message.reply_text("Usage: /allow [domain]")
+
+    link = normalize_link(context.args[0])
+    cmd = update.message.text.split()[0][1:].lower()
+    if cmd == "allow":
+        if link not in state.data["allowed_domains"]:
+            state.data["allowed_domains"].append(link)
+        msg = f"Allowed: <b>{escape(link)}</b>"
+    else:
+        if link in state.data["allowed_domains"]:
+            state.data["allowed_domains"].remove(link)
+        msg = f"Removed: <b>{escape(link)}</b>"
+    state.save()
+    await log_admin_action(update, cmd, details=link)
+    await update.message.reply_text(f"{STYLE['success']}\n{msg}", parse_mode=ParseMode.HTML)
+
+
+async def set_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
     target = await get_target_user(update, context)
-    if not target or target == "unknown_username": return await update.message.reply_text("Reply to user.")
-    if not context.args: return await update.message.reply_text("Usage: /setcode [Code]")
-    
-    if update.message.reply_to_message: code = " ".join(context.args)
-    else: code = " ".join(context.args[1:]) if (context.args[0].isdigit() or context.args[0].startswith("@")) else " ".join(context.args)
+    if target in (None, "unknown_username"):
+        return await update.message.reply_text("Reply to user or provide id.")
+
+    if update.message.reply_to_message:
+        code = " ".join(context.args)
+    else:
+        code = " ".join(context.args[1:]) if context.args else ""
+
+    if not code:
+        return await update.message.reply_text("Usage: /setcode <user> <Code>")
 
     state.data["admin_codes"][str(target.id)] = code
     state.save()
-    await update.message.reply_text(f"{STYLE['success']}\nSignature set: <b>{code}</b>", parse_mode="HTML")
+    await log_admin_action(update, "setcode", target, code)
+    await update.message.reply_text(f"{STYLE['success']}\nSignature set: <b>{escape(code)}</b>", parse_mode=ParseMode.HTML)
 
-async def set_messages(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_OWNER: return
-    cmd = update.message.text.split()[0][1:]
-    if not context.args: return await update.message.reply_text("Usage: /set... [New Message]")
-    text = update.message.text.split(None, 1)[1]
-    
-    key_map = {"setwelcome": "welcome_msg", "setwarnmsg": "warn_msg", "setmutemsg": "mute_msg", "setbanmsg": "ban_msg"}
-    if key_map.get(cmd):
-        state.data["settings"][key_map[cmd]] = text
-        state.save()
-        await update.message.reply_text(f"{STYLE['success']}\nMessage Updated.", parse_mode="HTML")
 
-# --- CONTROL ACTIONS ---
-
-async def cmd_lockdown(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_SUPER_ADMIN: return
-    chat = update.effective_chat
-    cmd = update.message.text.split()[0][1:]
-    
-    if cmd == "lock":
-        await context.bot.set_chat_permissions(chat.id, ChatPermissions(can_send_messages=False))
-        await update.message.reply_text(f"{STYLE['header']}\n馃敀 <b>GROUP LOCKED</b>\nOnly admins can speak.{STYLE['sig']}", parse_mode="HTML")
-    elif cmd == "unlock":
-        await context.bot.set_chat_permissions(chat.id, ChatPermissions(
-            can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True, can_add_web_page_previews=True
-        ))
-        await update.message.reply_text(f"{STYLE['header']}\n馃敁 <b>GROUP UNLOCKED</b>\nEveryone can speak.{STYLE['sig']}", parse_mode="HTML")
-
-async def cmd_purge(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_SUPER_ADMIN: return
-    if not update.message.reply_to_message: return await update.message.reply_text("Reply to start purging.")
-    
-    msg_id = update.message.reply_to_message.message_id
-    current_id = update.message.message_id
-    
-    await update.message.delete() 
-    ids_to_delete = list(range(msg_id, current_id + 1))
-    if len(ids_to_delete) > 50: ids_to_delete = ids_to_delete[-50:]
-    
-    deleted = 0
-    for mid in ids_to_delete:
-        try: await context.bot.delete_message(update.effective_chat.id, mid); deleted += 1
-        except: pass
-        
-    msg = await context.bot.send_message(update.effective_chat.id, f"馃棏锔� Purged {deleted} messages.")
-    time.sleep(3)
-    try: await msg.delete()
-    except: pass
-
-async def cmd_info(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_ADMIN: return
+async def set_badge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
     target = await get_target_user(update, context)
-    if not target or target == "unknown_username": return await update.message.reply_text("Target required.")
-    
-    ud = state.get_user_data(target.id)
-    perm_lvl = await check_permissions(target.id, update.effective_chat.id, context)
-    
-    role = "User"
-    if perm_lvl == PERM_OWNER: role = "OWNER"
-    elif perm_lvl == PERM_SUPER_ADMIN: role = "Super Admin"
-    elif perm_lvl == PERM_ADMIN: role = "Admin"
-    elif perm_lvl == PERM_VIP: role = "VIP"
-    
-    # FORMAT JOIN DATE
-    join_ts = ud.get("join_date")
-    join_str = datetime.fromtimestamp(join_ts).strftime("%Y-%m-%d %H:%M") if join_ts else "Unknown (Joined before V12)"
+    if target in (None, "unknown_username"):
+        return await update.message.reply_text("Usage: reply /setbadge ⭐")
 
-    text = (
-        f"{STYLE['info']}\n"
-        f"馃懁 <b>Name:</b> {target.full_name}\n"
-        f"馃啍 <b>ID:</b> <code>{target.id}</code>\n"
-        f"馃洝锔� <b>Role:</b> {role}\n"
-        f"馃搮 <b>Joined:</b> {join_str}\n"
-        f"鈿狅笍 <b>Warns:</b> {ud['warns']}/5\n"
-        f"{STYLE['sig']}"
-    )
-    await update.message.reply_text(text, parse_mode="HTML")
+    badge = context.args[-1] if context.args else ""
+    if not badge:
+        return await update.message.reply_text("Usage: /setbadge <user> <badge>")
 
-async def cmd_reset_warns(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_ADMIN: return
+    state.data.setdefault("badges", {})[str(target.id)] = badge
+    state.save()
+    await log_admin_action(update, "setbadge", target, badge)
+    await update.message.reply_text(f"{STYLE['success']}\nBadge updated to {escape(badge)}", parse_mode=ParseMode.HTML)
+
+
+async def grant_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
     target = await get_target_user(update, context)
-    if not target or target == "unknown_username": return await update.message.reply_text("Target required.")
-    
-    ud = state.get_user_data(target.id)
-    ud["warns"] = 0
-    ud["timestamps"] = []
-    state.update_user_data(target.id, ud)
-    await update.message.reply_text(f"{STYLE['success']}\nWarnings reset for {target.first_name}.", parse_mode="HTML")
+    if target in (None, "unknown_username") or len(context.args) < 2:
+        return await update.message.reply_text("Usage: /grant <user> <permission>")
 
-async def admin_broadcast(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_ADMIN: return
-    if not context.args: return
-    code = state.data["admin_codes"].get(str(update.effective_user.id), f"A-{str(update.effective_user.id)[-4:]}")
-    text = f"{' '.join(context.args)}\n\nSigned: <b>{code}</b>"
-    await update.message.delete()
-    if "reply" in update.message.text and update.message.reply_to_message:
-        await context.bot.send_message(update.effective_chat.id, text, reply_to_message_id=update.message.reply_to_message.message_id, parse_mode="HTML")
-    else:
-        await context.bot.send_message(update.effective_chat.id, text, parse_mode="HTML")
+    perm = context.args[-1].lower().strip()
+    user_perms = state.data.setdefault("custom_permissions", {}).setdefault(str(target.id), [])
+    if perm not in user_perms:
+        user_perms.append(perm)
+    state.save()
+    await log_admin_action(update, "grant", target, perm)
+    await update.message.reply_text(f"{STYLE['success']}\nGranted permission: <b>{escape(perm)}</b>", parse_mode=ParseMode.HTML)
 
-async def admin_replace(update, context):
-    if await check_permissions(update.effective_user.id, update.effective_chat.id, context) < PERM_ADMIN: return
-    if not update.message.reply_to_message: return await update.message.reply_text("Reply to a message.")
-    if not context.args: return
 
-    target_msg = update.message.reply_to_message
-    target_user = target_msg.from_user
-    admin_i
+async def revoke_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await has_permission(update.effective_user.id, update.effective_chat.id, context, ROLE_OWNER):
+        return
+    target = await get_target_user(update, context)
+    if target in (None, "unknown_username") or len(context.args) < 2:
+        return await update.message.re
